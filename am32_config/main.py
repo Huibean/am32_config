@@ -8,9 +8,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='AM32 Config Tool')
     parser.add_argument('-p', '--port', required=True, help='Serial port to use')
     parser.add_argument('-b', '--baud', type=int, default=115200, help='Baud rate (default: 115200)')
+    parser.add_argument('-d', '--debug', action='store_true', help='Enable debug mode')
     args = parser.parse_args()
 
-    am32_config = AM32_CONFIG(args.port, baudrate=args.baud)
+    am32_config = AM32_CONFIG(args.port, baudrate=args.baud, debug=args.debug)
+
+    if args.debug:
+        print("Debug mode enabled")
     
     print("initializing...")
     time.sleep(2)
