@@ -83,6 +83,7 @@ if __name__ == "__main__":
         am32_config.close()
         sys.exit(1)
 
+    print("Sending cmd_DeviceRead...")
     eeprom_params = am32_config.read_eeprom_params_from_device()
     if eeprom_params:
         for esc_index in range(am32_config.get_motor_count()):
