@@ -93,5 +93,12 @@ if __name__ == "__main__":
                 else:
                     print(f"ESC {esc_index + 1} No Response")
     
+    print("Sending cmd_DeviceExit...")
+    response = am32_config.send_four_way_command(FOUR_WAY_COMMANDS['cmd_InterfaceExit'], [0])
+    if not response:
+        print("No response for cmd_InterfaceExit")
+        am32_config.close()
+        sys.exit(1)
+    
     # Close the serial port
     am32_config.close()
