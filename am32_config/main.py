@@ -76,22 +76,17 @@ if __name__ == "__main__":
     print("Got msp data:", am32_config.decode_response(parsed_response))
     
     # Send and receive FOUR_WAY commands
-    print("Sending cmd_DeviceInitFlash...")
-    response = am32_config.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceInitFlash'], [0])
-    if not response:
-        print("No response for cmd_DeviceInitFlash")
-        am32_config.close()
-        sys.exit(1)
-
     print("Sending cmd_DeviceRead...")
-    eeprom_params = am32_config.read_eeprom_params_from_device()
+    eeprom_params = am32_config.read_eeprom_params_from_all_esc()
     if eeprom_params:
         for esc_index in range(am32_config.get_motor_count()):
-            if esc_index == 0: #multi esc reading not working yet
-                if eeprom_params[esc_index]:
-                    print(f"ESC {esc_index + 1}: eeprom_params:", eeprom_params[esc_index])
-                else:
-                    print(f"ESC {esc_index + 1} No Response")
+            esc_params = eeprom_params[esc_index]
+            if esc_params:
+                # print(f"ESC {esc_index + 1}: eeprom_params:", eeprom_params[esc_index])
+                print(f"#ESC {esc_index + 1}: Firmware Name:", esc_params.get('firmware_name'))
+                # Wirting params 
+                print(f"#ESC {esc_index + 1}: reset default params")
+                am32_config.reset_default_params(esc_index)
     
     print("Sending cmd_DeviceExit...")
     response = am32_config.send_four_way_command(FOUR_WAY_COMMANDS['cmd_InterfaceExit'], [0])

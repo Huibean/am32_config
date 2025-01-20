@@ -1,6 +1,6 @@
 import serial
 import time
-import sys
+import os
 
 EEPROM_OFFSET = 0xF800
 EEPROM_LENGTH = 184
@@ -112,9 +112,10 @@ class AM32_CONFIG:
     def __init__(self, port, baudrate=115200, timeout=1, debug=False):
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
         self.fc_response = {}
+        self.eeprom_params = {}
         self.debug = debug
 
-    def reset():
+    def reset(self):
         self.fc_response = {}
 
     def send_msp_command(self, command, wait_time=0.5):
@@ -239,7 +240,7 @@ class AM32_CONFIG:
         else:
             return f"Unknown command {command} with data: {data}"
 
-    def send_four_way_command(self, command, params, address=0, retries=3, wait_time=0.5):
+    def send_four_way_command(self, command, params, address=0, retries=1, wait_time=0.5):
         for attempt in range(retries):
             if len(params) == 0:
                 params.append(0)
@@ -271,7 +272,7 @@ class AM32_CONFIG:
             if parsed_response and parsed_response['ack'] == FOUR_WAY_ACK['ACK_OK']:
                 return parsed_response
             else:
-                print(f"error: {parsed_response['ack'] if parsed_response else 'No response'}")
+                print(f"error ack: {parsed_response['ack'] if parsed_response else 'No response'}")
         
         print("max retries reached")
         return None
@@ -382,17 +383,71 @@ class AM32_CONFIG:
     def read_mcu_info(self):
         pass
 
-    def read_eeprom_params_from_device(self):
-        eeprom_params = {}
+    def read_eeprom_params_from_all_esc(self):
+        self.eeprom_params = {}
         targets = []
         for esc_index in range(self.get_motor_count()):
-            eeprom_params[esc_index] = {}
+            self.eeprom_params[esc_index] = {}
             targets.append(EEPROM_LENGTH)
 
         for esc_index in range(self.get_motor_count()):
-            response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceRead'], targets, EEPROM_OFFSET)
-            if not response:
-                print(f"No response for cmd_DeviceRead at address {EEPROM_OFFSET}")
-                return False
-            eeprom_params[esc_index] = self.parse_eeprom_data(response['params'])
-        return eeprom_params
+            self.read_eeprom_params_from_single_esc(esc_index)
+        return self.eeprom_params
+    
+    def read_eeprom_params_from_single_esc(self, esc_index):
+        self.eeprom_params[esc_index] = {}
+        targets = [EEPROM_LENGTH]
+
+        print(f"#ESC{esc_index + 1} Sending cmd_DeviceInitFlash...")
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceInitFlash'], [esc_index])
+        if not response:
+            print(f"#ESC{esc_index + 1} No response for cmd_DeviceInitFlash")
+            return None
+
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceRead'], targets, EEPROM_OFFSET)
+        if not response:
+            print(f"#ESC{esc_index + 1} No response for cmd_DeviceRead at address {EEPROM_OFFSET}")
+            return None
+        self.eeprom_params[esc_index] = self.parse_eeprom_data(response['params'])
+        return self.eeprom_params[esc_index]
+
+    def pack_eeprom_params(self, eeprom_params):
+        packed_data = bytearray(192)
+        for key, value in eeprom_params.items():
+            if key not in EEPROM_STRUCT:
+                print(f"Invalid key {key} in eeprom_params")
+                continue
+            address = EEPROM_STRUCT[key]
+            byte_len = self.get_param_byte_len(key)
+            if key == 'firmware_name':
+                packed_data[address:address+12] = bytearray(value, 'ascii')
+            elif key == 'tune':
+                packed_data[address:address+128] = value
+            elif key == 'can_reserved':
+                packed_data[address:address+8] = value
+            else:
+                packed_data[address] = value
+        return packed_data
+    
+    def write_eeprom_params_to_esc(self, esc_index, esc_params):
+        packed_data = self.pack_eeprom_params(esc_params)
+        print(f"#ESC{esc_index+1} send cmd_DeviceInitFlash")
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceInitFlash'], [esc_index])
+        if not response:
+            print(f"#ESC{esc_index+1} No response for cmd_DeviceInitFlash")
+            return False
+        print(f"#ESC{esc_index+1} send cmd_DeviceWrite")
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceWrite'], packed_data, EEPROM_OFFSET)
+        if not response:
+            print(f"#ESC{esc_index+1} No response for cmd_DeviceWrite at address {EEPROM_OFFSET}")
+            return False
+        return True
+
+    def read_eeprom_default(self, filepath):
+        with open(filepath, 'rb') as file:
+            return file.read()
+    
+    def reset_default_params(self, esc_index):
+        data = self.read_eeprom_default(os.path.join(os.path.dirname(__file__), 'eeprom_default.bin'))
+        default_params = self.parse_eeprom_data(data)
+        self.write_eeprom_params_to_esc(esc_index, default_params)
