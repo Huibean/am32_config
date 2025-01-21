@@ -240,7 +240,7 @@ class AM32_CONFIG:
         else:
             return f"Unknown command {command} with data: {data}"
 
-    def send_four_way_command(self, command, params, address=0, retries=1, wait_time=0.5):
+    def send_four_way_command(self, command, params, address=0, retries=3, wait_time=0.5):
         for attempt in range(retries):
             if len(params) == 0:
                 params.append(0)
@@ -318,6 +318,10 @@ class AM32_CONFIG:
         return message
 
     def close(self):
+        print("Sending cmd_DeviceExit...")
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_InterfaceExit'], [0])
+        if not response:
+            print("No response for cmd_InterfaceExit")
         self.ser.close()
 
     def send_msp_api_version(self):
@@ -350,14 +354,21 @@ class AM32_CONFIG:
     def parse_eeprom_data(self, data):
         eeprom_dict = {}
         for key, address in EEPROM_STRUCT.items():
-            if key == 'firmware_name':
-                eeprom_dict[key] = data[address:address+12].decode('ascii').strip('\x00')
-            elif key == 'tune':
-                eeprom_dict[key] = list(data[address:address+128])
-            elif key == 'can_reserved':
-                eeprom_dict[key] = data[address:address+8]
+            byte_len = self.get_param_byte_len(key)
+            if len(data) < address + byte_len:
+                if byte_len == 1:
+                    eeprom_dict[key] = 255 
+                else:
+                    eeprom_dict[key] = [255] * byte_len 
             else:
-                eeprom_dict[key] = int(data[address])
+                if key == 'firmware_name':
+                    eeprom_dict[key] = data[address:address+12].decode('ascii').strip('\x00')
+                elif key == 'tune':
+                    eeprom_dict[key] = list(data[address:address+128])
+                elif key == 'can_reserved':
+                    eeprom_dict[key] = data[address:address+8]
+                else:
+                    eeprom_dict[key] = int(data[address])
         return eeprom_dict
 
     def get_param_byte_len(self, key):
@@ -385,11 +396,6 @@ class AM32_CONFIG:
 
     def read_eeprom_params_from_all_esc(self):
         self.eeprom_params = {}
-        targets = []
-        for esc_index in range(self.get_motor_count()):
-            self.eeprom_params[esc_index] = {}
-            targets.append(EEPROM_LENGTH)
-
         for esc_index in range(self.get_motor_count()):
             self.read_eeprom_params_from_single_esc(esc_index)
         return self.eeprom_params
@@ -408,8 +414,12 @@ class AM32_CONFIG:
         if not response:
             print(f"#ESC{esc_index + 1} No response for cmd_DeviceRead at address {EEPROM_OFFSET}")
             return None
-        self.eeprom_params[esc_index] = self.parse_eeprom_data(response['params'])
-        return self.eeprom_params[esc_index]
+
+        try:
+            self.eeprom_params[esc_index] = self.parse_eeprom_data(response['params'])
+            return self.eeprom_params[esc_index]
+        except:
+            return None
 
     def pack_eeprom_params(self, eeprom_params):
         packed_data = bytearray(192)
@@ -441,13 +451,55 @@ class AM32_CONFIG:
         if not response:
             print(f"#ESC{esc_index+1} No response for cmd_DeviceWrite at address {EEPROM_OFFSET}")
             return False
+
+        if  response['ack'] != FOUR_WAY_ACK['ACK_OK']:
+            print(f"#ESC{esc_index+1} cmd_DeviceWrite failed")
+            return False
         return True
 
     def read_eeprom_default(self, filepath):
         with open(filepath, 'rb') as file:
             return file.read()
     
-    def reset_default_params(self, esc_index):
-        data = self.read_eeprom_default(os.path.join(os.path.dirname(__file__), 'eeprom_default.bin'))
+    def reset_default_params(self, esc_index, default_eeprom_path):
+        data = self.read_eeprom_default(default_eeprom_path)
         default_params = self.parse_eeprom_data(data)
         self.write_eeprom_params_to_esc(esc_index, default_params)
+
+    def flash_esc_firmware(self, esc_index, firmware_path, start_address=0x1000, chunk_size = 256):
+        # Adjust chunk size if necessary
+        print(f"#ESC{esc_index+1} Flashing Firmware...")
+        with open(firmware_path, 'rb') as firmware_file:
+            firmware_data = firmware_file.read()
+        firmware_size = len(firmware_data)
+        print(f"Firmware size: {firmware_size} bytes")
+
+        print(f"#ESC{esc_index+1} send cmd_DeviceInitFlash")
+        response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceInitFlash'], [esc_index])
+        if not response:
+            print(f"#ESC{esc_index+1} No response for cmd_DeviceInitFlash")
+            return False
+        
+        if  response['ack'] != FOUR_WAY_ACK['ACK_OK']:
+            print(f"#ESC{esc_index+1} cmd_DeviceInitFlash failed")
+            return False
+        
+        next_progress = 10
+        
+        for i in range(0, len(firmware_data), chunk_size):
+            chunk = firmware_data[i:i + chunk_size]
+            address = start_address + i
+            # print(f"Flashing firmware chunk to address {hex(address)}")
+            response = self.send_four_way_command(FOUR_WAY_COMMANDS['cmd_DeviceWrite'], list(chunk), address, wait_time=0.2) # set wait time lower to speed up flashing
+            if not response:
+                print(f"No response for cmd_DeviceWrite at address {hex(address)}")
+                return False
+            if response['ack'] != FOUR_WAY_ACK['ACK_OK']:
+                print(f"#ESC{esc_index+1} cmd_DeviceWrite failed")
+                return False
+            # Calculate and print the percentage of firmware flashed
+            percentage = (i + chunk_size) / firmware_size * 100
+            if percentage >= next_progress:
+                print(f"Flashing progress: {next_progress}%")
+                next_progress += 10
+        return True
